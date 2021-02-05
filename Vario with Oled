@@ -1,0 +1,199 @@
+// sum code by Rolf R Bakke, Oct 2012
+#include <Wire.h>
+//OLED stuf
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+
+#define OLED_RESET     4
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+////////
+
+
+unsigned int calibrationData[7];
+unsigned long time = 0;
+
+float toneFreq, toneFreqLowpass, pressure, lowpassFast, lowpassSlow ;
+
+int ddsAcc;
+int Variodirection;
+
+int line1 = 16;
+int line2;
+int line3;
+int line4;
+int line5;
+int lined;
+
+void setup()  {
+  Wire.begin();
+  Serial.begin(115200);
+  setupSensor();
+  
+  pressure = getPressure();
+  lowpassFast = lowpassSlow = pressure;
+
+// more oled stuff
+if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
+  }
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(30, 10);
+  // Display static text
+  display.println("Glider Ready");
+  display.display(); 
+
+
+  delay(2000);
+  display.clearDisplay();
+  display.display(); 
+
+///////////
+  
+}
+
+void loop()
+{
+  
+  pressure = getPressure();
+  
+  lowpassFast = lowpassFast + (pressure - lowpassFast) * 0.1;
+  lowpassSlow = lowpassSlow + (pressure - lowpassSlow) * 0.05;
+  
+  toneFreq = (lowpassSlow - lowpassFast) * 50;
+  
+  toneFreqLowpass = toneFreqLowpass + (toneFreq - toneFreqLowpass) * 0.1;
+   
+  toneFreq = constrain(toneFreqLowpass, -500, 500);
+  
+  ddsAcc += toneFreq * 100 + 2000;
+  
+  if (toneFreq < 0 || ddsAcc > 0) 
+  {
+    tone(2, toneFreq + 510);  
+  }
+  else
+  {
+    noTone(2);
+  }
+
+
+/// oled vario ////////
+
+Variodirection = (toneFreq / 2)*-1;
+
+display.clearDisplay();
+//mid
+display.drawLine(0, line1,64, Variodirection + line1, WHITE);
+display.drawLine(64, Variodirection+line1, 128,line1, WHITE);
+//top line
+display.drawLine(0, line2,64, Variodirection + line2, WHITE);
+display.drawLine(64, Variodirection+line2, 128,line2, WHITE);
+
+display.drawLine(0, line4,64, Variodirection + line4, WHITE);
+display.drawLine(64, Variodirection+line4, 128,line4, WHITE);
+
+//bot line
+display.drawLine(0, line3,64, Variodirection + line3, WHITE);
+display.drawLine(64, Variodirection+line3, 128,line3, WHITE);
+
+display.drawLine(0, line5,64, Variodirection + line5, WHITE);
+display.drawLine(64, Variodirection+line5, 128,line5, WHITE);
+
+display.display();
+
+line1 = line1 + (Variodirection / 2);
+if (line1 > 32){
+  line1 = 0; 
+}
+if (line1 < 0){
+  line1 = 32; 
+}
+
+line2 = line1 - 10;
+line3 = line1 + 10;
+line4 = line1 - 20;
+line5 = line1 + 20;
+
+ 
+}
+
+////////////////////////////
+long getPressure()
+{
+  long D1, D2, dT, P;
+  float TEMP;
+  int64_t OFF, SENS;
+ 
+  D1 = getData(0x48, 10);
+  D2 = getData(0x50, 1);
+
+  dT = D2 - ((long)calibrationData[5] << 8);
+  TEMP = (2000 + (((int64_t)dT * (int64_t)calibrationData[6]) >> 23)) / (float)100;
+  OFF = ((unsigned long)calibrationData[2] << 16) + (((int64_t)calibrationData[4] * dT) >> 7);
+  SENS = ((unsigned long)calibrationData[1] << 15) + (((int64_t)calibrationData[3] * dT) >> 8);
+  P = (((D1 * SENS) >> 21) - OFF) >> 15;
+  
+  //Serial.println(TEMP);
+  //Serial.println(P);
+  
+  return P;
+}
+
+
+long getData(byte command, byte del)
+{
+  long result = 0;
+  twiSendCommand(0x77, command);
+  delay(del);
+  twiSendCommand(0x77, 0x00);
+  Wire.requestFrom(0x77, 3);
+  if(Wire.available()!=3) Serial.println("Error: raw data not available");
+  for (int i = 0; i <= 2; i++)
+  {
+    result = (result<<8) | Wire.read(); 
+  }
+  return result;
+}
+
+
+void setupSensor()
+{
+  twiSendCommand(0x77, 0x1e);
+  delay(100);
+  
+  for (byte i = 1; i <=6; i++)
+  {
+    unsigned int low, high;
+
+    twiSendCommand(0x77, 0xa0 + i * 2);
+    Wire.requestFrom(0x77, 2);
+    if(Wire.available()!=2) Serial.println("Error: calibration data not available");
+    high = Wire.read();
+    low = Wire.read();
+    calibrationData[i] = high<<8 | low;
+    Serial.print("calibration data #");
+    Serial.print(i);
+    Serial.print(" = ");
+    Serial.println( calibrationData[i] ); 
+  }
+}
+
+
+void twiSendCommand(byte address, byte command)
+{
+  Wire.beginTransmission(address);
+  if (!Wire.write(command)) Serial.println("Error: write()");
+  if (Wire.endTransmission()) 
+  {
+    Serial.print("Error when sending command: ");
+    Serial.println(command, HEX);
+  }
+}
